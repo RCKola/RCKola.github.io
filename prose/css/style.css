@@ -717,12 +717,51 @@ body {
   height: 100% !important;
 }
 
-.sample-buttons {
+.viewer-controls {
   display: flex;
   justify-content: center;
-  gap: 8px;
+  align-items: center;
+  gap: 24px;
   margin-top: 16px;
   flex-wrap: wrap;
+}
+
+.sample-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.view-toggle {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.toggle-btn {
+  padding: 6px 14px;
+  border: none;
+  background: var(--bg-white);
+  color: var(--text-body);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.toggle-btn:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+.toggle-btn:hover {
+  color: var(--primary);
+}
+
+.toggle-btn.active {
+  background: var(--primary);
+  color: #fff;
 }
 
 .sample-btn {

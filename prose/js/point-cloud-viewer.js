@@ -205,8 +205,12 @@ function createViewer(container, options = {}) {
   controls.target.set(0, 0, 0);
   controls.enablePan = false;
   controls.autoRotate = autoRotate;
-  controls.autoRotateSpeed = 1.0;
+  controls.autoRotateSpeed = 0.4;
   controls.update();
+
+  renderer.domElement.addEventListener('pointerdown', () => {
+    if (window._toggleAllAutoRotate) window._toggleAllAutoRotate();
+  });
 
   function animate() {
     requestAnimationFrame(animate);
@@ -243,14 +247,48 @@ function createCloudMesh(points, color, scene) {
   return inst;
 }
 
-/*
- * Registration comparison viewers: TEASER++ | SG-Reg | Ours | GT.
- * Each panel shows the reference scan (gray) and the source scan (orange)
- * transformed by that method's estimated registration.
- *
- * Currently fed with procedurally generated sample scenes — swap loadSample()
- * to fetch real exported point clouds (e.g. JSON) when available.
- */
+function createRGBCloudMesh(points, colors, scene) {
+  const mat = new THREE.MeshBasicMaterial();
+  const inst = new THREE.InstancedMesh(SPHERE_GEO, mat, points.length);
+  const dummy = new THREE.Object3D();
+  const c = new THREE.Color();
+  points.forEach(([x, y, z], i) => {
+    dummy.position.set(x, y, z);
+    dummy.updateMatrix();
+    inst.setMatrixAt(i, dummy.matrix);
+    const [r, g, b] = colors[i];
+    c.setRGB(r / 255, g / 255, b / 255);
+    inst.setColorAt(i, c);
+  });
+  inst.instanceMatrix.needsUpdate = true;
+  inst.instanceColor.needsUpdate = true;
+  scene.add(inst);
+  return inst;
+}
+
+const DATA_BASE = 'static/data/pcd_comparison_viewer';
+
+async function fetchCloud(path) {
+  const res = await fetch(path);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+function computeNormTransform(clouds) {
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (const pts of clouds) {
+    for (const [x, y, z] of pts) {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+    }
+  }
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2, cz = (minZ + maxZ) / 2;
+  const scale = 2.4 / Math.max(maxX - minX, maxY - minY, maxZ - minZ, 0.001);
+  return pts => pts.map(([x, y, z]) => [(x - cx) * scale, (y - cy) * scale, (z - cz) * scale]);
+}
+
 export function initRegistrationViewers(containerIds) {
   const KEYS = ['teaser', 'sgreg', 'ours', 'gt'];
   const viewers = [];
@@ -262,7 +300,11 @@ export function initRegistrationViewers(containerIds) {
     viewers.push({ scene, controls, meshes: [], key });
   });
 
-  // Sync camera across all four panels
+  window._toggleAllAutoRotate = () => {
+    const shouldRotate = !viewers[0]?.controls.autoRotate;
+    viewers.forEach(v => { v.controls.autoRotate = shouldRotate; });
+  };
+
   let syncing = false;
   viewers.forEach((v, srcIdx) => {
     v.controls.addEventListener('change', () => {
@@ -284,20 +326,102 @@ export function initRegistrationViewers(containerIds) {
     });
   });
 
+  let currentMode = 'registration';
+  let cachedData = null;
+
+  function clearMeshes() {
+    viewers.forEach(v => {
+      v.meshes.forEach(m => v.scene.remove(m));
+      v.meshes = [];
+    });
+  }
+
+  function renderRegistration(data) {
+    clearMeshes();
+    const { normRef, normSrcByKey } = data;
+    viewers.forEach(v => {
+      v.meshes = [
+        createCloudMesh(normRef, REF_COLOR, v.scene),
+        createCloudMesh(normSrcByKey[v.key], SRC_COLOR, v.scene),
+      ];
+    });
+  }
+
+  function renderRGB(data) {
+    clearMeshes();
+    const { normRef, normSrcByKey, refRgb, srcRgbByKey } = data;
+    viewers.forEach(v => {
+      v.meshes = [
+        createRGBCloudMesh(normRef, refRgb, v.scene),
+        createRGBCloudMesh(normSrcByKey[v.key], srcRgbByKey[v.key], v.scene),
+      ];
+    });
+  }
+
+  function renderCurrent() {
+    if (!cachedData) return;
+    if (currentMode === 'rgb' && cachedData.refRgb) {
+      renderRGB(cachedData);
+    } else {
+      renderRegistration(cachedData);
+    }
+  }
+
+  function loadSyntheticFallback(index) {
+    const seedStr = `qual/${index}`;
+    const jitter = SAMPLE_JITTER[index % SAMPLE_JITTER.length] ?? 0.03;
+    const { ref, src } = makeScanPair(seedStr, jitter);
+    cachedData = {
+      normRef: ref,
+      normSrcByKey: Object.fromEntries(KEYS.map(k => {
+        const err = METHOD_ERROR[k];
+        return [k, applyError(src, err.rot, err.trans, seedStr + '/' + k)];
+      })),
+      refRgb: null,
+      srcRgbByKey: null,
+    };
+    renderCurrent();
+  }
+
   return {
-    loadSample(index) {
-      const seedStr = `qual/${index}`;
-      const jitter = SAMPLE_JITTER[index % SAMPLE_JITTER.length] ?? 0.03;
-      const { ref, src } = makeScanPair(seedStr, jitter);
-      viewers.forEach(v => {
-        v.meshes.forEach(m => v.scene.remove(m));
-        const err = METHOD_ERROR[v.key];
-        const srcT = applyError(src, err.rot, err.trans, seedStr + '/' + v.key);
-        v.meshes = [
-          createCloudMesh(ref, REF_COLOR, v.scene),
-          createCloudMesh(srcT, SRC_COLOR, v.scene),
-        ];
+    async loadSample(index) {
+      const dir = `${DATA_BASE}/${index}`;
+      const results = await Promise.all([
+        fetchCloud(`${dir}/ref.json`),
+        fetchCloud(`${dir}/ref_rgb.json`),
+        ...KEYS.flatMap(k => [
+          fetchCloud(`${dir}/src_${k}.json`),
+          fetchCloud(`${dir}/src_${k}_rgb.json`),
+        ]),
+      ]);
+
+      const refData = results[0];
+      const refRgb = results[1];
+      const srcDataByKey = {};
+      const srcRgbByKey = {};
+      KEYS.forEach((k, i) => {
+        srcDataByKey[k] = results[2 + i * 2];
+        srcRgbByKey[k] = results[3 + i * 2];
       });
+
+      if (!refData || KEYS.some(k => !srcDataByKey[k])) {
+        loadSyntheticFallback(index);
+        return;
+      }
+
+      const norm = computeNormTransform([refData, ...Object.values(srcDataByKey)]);
+      cachedData = {
+        normRef: norm(refData),
+        normSrcByKey: Object.fromEntries(KEYS.map(k => [k, norm(srcDataByKey[k])])),
+        refRgb,
+        srcRgbByKey,
+      };
+      renderCurrent();
+    },
+
+    setMode(mode) {
+      currentMode = mode;
+      renderCurrent();
     },
   };
 }
