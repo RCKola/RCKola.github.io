@@ -115,6 +115,22 @@ body {
   margin-top: 4px;
 }
 
+.authors-venue {
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin-top: 18px;
+  letter-spacing: 0.03em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.flag-icon {
+  width: 1.3em;
+  height: 1.3em;
+}
+
 .link-buttons {
   display: flex;
   justify-content: center;

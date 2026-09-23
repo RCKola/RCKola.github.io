@@ -41,6 +41,26 @@
   );
   faders.forEach(el => observer.observe(el));
 
+  // ===== Publication thumbnail lightbox =====
+  document.querySelectorAll('.pub-thumbnail img').forEach(img => {
+    img.addEventListener('click', () => {
+      const overlay = document.createElement('div');
+      overlay.className = 'pub-lightbox';
+      const clone = document.createElement('img');
+      clone.src = img.src;
+      clone.alt = img.alt;
+      overlay.appendChild(clone);
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', () => overlay.remove());
+      document.addEventListener('keydown', function esc(e) {
+        if (e.key === 'Escape') {
+          overlay.remove();
+          document.removeEventListener('keydown', esc);
+        }
+      });
+    });
+  });
+
   // ===== Interactive 3D Point Cloud on Canvas =====
   const canvas = document.getElementById('bg-canvas');
   const ctx = canvas.getContext('2d');
